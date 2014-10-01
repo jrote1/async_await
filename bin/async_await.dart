@@ -13,8 +13,10 @@ main(List<String> args) {
     print('Usage: async_await.dart [file]');
     exit(0);
   }
-  var source = new File(args.first).readAsStringSync();
-  var output = compile(source, (errorCollector) {
+  var compiler = new Compiler();
+  var file = new File(args.first).absolute;
+  var source = file.readAsStringSync();
+  var output = compiler.compile(source, file.path, (errorCollector) {
     print("Errors:");
     errorCollector.errors.forEach(print);
     exit(1);
