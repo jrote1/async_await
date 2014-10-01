@@ -25,32 +25,32 @@ class ErrorCollector extends AnalysisErrorListener {
 }
 
 class Compiler {
-  AnalysisContext context;
-  DartSdk sdk;
+  AnalysisContext _context;
+  DartSdk _sdk;
 
   Compiler() {
-    context = AnalysisEngine.instance.createAnalysisContext();
+    _context = AnalysisEngine.instance.createAnalysisContext();
     String sdkPath = Platform.environment['DART_SDK'];
     if (sdkPath == null) {
       throw 'Cannot find the Dart SDK (perhaps DART_SDK is not set).';
     }
-    sdk = new DirectoryBasedDartSdk(new JavaFile(sdkPath)) as DartSdk;
-    context.sourceFactory = new SourceFactory([new DartUriResolver(sdk),
-                                               new FileUriResolver()]);
-    (context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
+    _sdk = new DirectoryBasedDartSdk(new JavaFile(sdkPath));
+    _context.sourceFactory = new SourceFactory([new DartUriResolver(_sdk),
+                                                new FileUriResolver()]);
+    (_context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
   }
 
-  CompilationUnit parse(String source, String path,
+  CompilationUnit _parse(String source, String path,
       AnalysisErrorListener errorListener) {
     var stringSource = new StringSource(source, path);
-    var libraryElement = context.computeLibraryElement(stringSource);
-    return context.getResolvedCompilationUnit(stringSource, libraryElement);
+    var libraryElement = _context.computeLibraryElement(stringSource);
+    return _context.getResolvedCompilationUnit(stringSource, libraryElement);
   }
 
   String compile(String source, String path,
       String onError(ErrorCollector errorCollector)) {
     var errorCollector = new ErrorCollector();
-    var unit = parse(source, path, errorCollector);
+    var unit = _parse(source, path, errorCollector);
 
     if (errorCollector.errors.isNotEmpty) {
       return onError(errorCollector);

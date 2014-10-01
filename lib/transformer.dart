@@ -6,11 +6,13 @@ import 'dart:async';
 
 import 'package:barback/barback.dart';
 
-import 'async_await.dart';
+import 'compiler.dart';
 
 /// A [Transformer] that runs the async/await compiler on any .dart files it
 /// finds.
 class AsyncAwaitTransformer extends Transformer implements LazyTransformer {
+  Compiler compiler = new Compiler();
+
   AsyncAwaitTransformer.asPlugin();
 
   String get allowedExtensions => ".dart";
@@ -22,7 +24,11 @@ class AsyncAwaitTransformer extends Transformer implements LazyTransformer {
 
   Future apply(Transform transform) {
     return transform.primaryInput.readAsString().then((source) {
-      source = compile(source);
+      source = compiler.compile(source, transform.primaryInput.id.path,
+          (errorCollector) {
+            throw new FormatException(
+                "Compilation error:\n${errorCollector.errors.join("\n")}");
+           });
       transform.addOutput(
           new Asset.fromString(transform.primaryInput.id, source));
     });

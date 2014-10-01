@@ -6,7 +6,7 @@
 
 import 'dart:io';
 
-import 'package:async_await/src/compiler.dart';
+import 'package:async_await/compiler.dart';
 
 main(List<String> args) {
   if (args.length != 1) {
