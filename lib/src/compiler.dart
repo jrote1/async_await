@@ -25,6 +25,8 @@ class ErrorCollector extends AnalysisErrorListener {
 }
 
 class Compiler {
+  static Compiler _instance = new Compiler();
+
   AnalysisContext _context;
   DartSdk _sdk;
 
@@ -34,7 +36,7 @@ class Compiler {
     if (sdkPath == null) {
       throw 'Cannot find the Dart SDK (perhaps DART_SDK is not set).';
     }
-    _sdk = new DirectoryBasedDartSdk(new JavaFile(sdkPath));
+    _sdk = new DirectoryBasedDartSdk(new JavaFile(sdkPath)) as DartSdk;
     _context.sourceFactory = new SourceFactory([new DartUriResolver(_sdk),
                                                 new FileUriResolver()]);
     (_context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
@@ -47,10 +49,10 @@ class Compiler {
     return _context.getResolvedCompilationUnit(stringSource, libraryElement);
   }
 
-  String compile(String source, String path,
+  static String compile(String source, String path,
       String onError(ErrorCollector errorCollector)) {
     var errorCollector = new ErrorCollector();
-    var unit = _parse(source, path, errorCollector);
+    var unit = _instance._parse(source, path, errorCollector);
 
     if (errorCollector.errors.isNotEmpty) {
       return onError(errorCollector);

@@ -6,17 +6,16 @@
 
 import 'dart:io';
 
-import 'package:async_await/compiler.dart';
+import 'package:async_await/src/compiler.dart';
 
 main(List<String> args) {
   if (args.length != 1) {
     print('Usage: async_await.dart [file]');
     exit(0);
   }
-  var compiler = new Compiler();
   var file = new File(args.first).absolute;
   var source = file.readAsStringSync();
-  var output = compiler.compile(source, file.path, (errorCollector) {
+  var output = Compiler.compile(source, file.path, (errorCollector) {
     print("Errors:");
     errorCollector.errors.forEach(print);
     exit(1);
