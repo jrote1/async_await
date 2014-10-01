@@ -72,5 +72,3 @@ class Compiler {
     return pretty.buffer.toString();
   }
 }
-
-
