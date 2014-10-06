@@ -482,6 +482,11 @@ class AsyncTransformer extends ast.AstVisitor {
   String currentExceptionName;
   String currentStackTraceName;
 
+  // Inside an asynchronous for loop, the translation maintains the name of
+  // the current stream's StreamController.  When not inside an asynchronous
+  // for loop, it is null.
+  String currentStream;
+
   visit(ast.AstNode node) => node.accept(this);
 
   Map<String, int> nameCounters;
@@ -502,6 +507,7 @@ class AsyncTransformer extends ast.AstVisitor {
     continueTargets = <JumpTarget>[];
     currentExceptionName = null;
     currentStackTraceName = null;
+    currentStream = null;
     awaits = analysis.awaits;
     labels = analysis.labels;
     names = analysis.names;
@@ -825,7 +831,9 @@ class AsyncTransformer extends ast.AstVisitor {
     });
   };
 
-  visitForEachStatement(ast.ForEachStatement node) {
+  // Expand the syntactic sugar of a for-in loop according to the translation
+  // in the spec.
+  _translateSynchronousForEach(ast.ForEachStatement node) {
     var stmt = make.emptyBlock();
     var it = newName('it');
     stmt.statements.add(
@@ -847,13 +855,135 @@ class AsyncTransformer extends ast.AstVisitor {
               scanner.Keyword.keywords[node.loopVariable.keyword.lexeme],
               [make.variableDeclaration(
                    node.loopVariable.identifier.name,
-                   make.propertyAccess(make.identifier(it), 'current'))]),
+                   make.propertyAccess(make.identifier(it), 'current'))],
+              node.loopVariable.type),
            node.body]);
     }
     stmt.statements.add(make.whileStatement(
         make.methodInvocation(make.identifier(it), 'moveNext', []),
         body));
-    return visitBlock(stmt);
+    return stmt;
+  }
+
+  // The asynchronous loop `await for (T X in E) S1; S2;` is translated
+  // with respect to an outer stream `outer` as:
+  //
+  // done() {
+  //   outer.resume();
+  //   [[S2]]
+  // }
+  // finally_(cont) {
+  //   try {
+  //     new Future.value(stream.cancel()).then(cont);
+  //   } catch (ex, st) {
+  //     ek(ex, st);
+  //   }
+  // }
+  // catch_(ex, st) {
+  //   finally_(() => ek(ex, st));
+  // }
+  // outer.pause();
+  // var stream;
+  // stream = [[E]].listen((v) {
+  //     T X = v;
+  //     [[S1]]
+  // }, onError: catch_, onDone: done);
+  visitForEachStatement(ast.ForEachStatement node) {
+    if (node.awaitKeyword == null) {
+      var stmt = _translateSynchronousForEach(node);
+      return visitBlock(stmt);
+    }
+    return (rk, ek, sk) {
+      return visit(node.iterator)(ek, (expr) {
+        var savedBlock = currentBlock;
+        var doneBlock = currentBlock = make.emptyBlock();
+        var doneName = newName('done');
+        if (currentStream != null) {
+          addStatement(make.methodInvocation(
+              make.identifier(currentStream), 'resume', []));
+        }
+        sk();
+
+        var finallyBlock = currentBlock = make.emptyBlock();
+        var finallyName = newName('finally');
+        var finallyContName = newName('cont');
+        var exceptionName = newName('e');
+        var stackTraceName = newName('s');
+        var streamName = newName('stream');
+        addStatement(make.tryStatement(make.block(
+            [make.methodInvocation(
+                 make.newInstance(make.identifier('Future', 'value'),
+                     [make.methodInvocation(
+                          make.identifier(streamName), 'cancel', [])]),
+                 'then',
+                 [make.identifier(finallyContName)])]),
+            [make.catchClause(null, exceptionName, stackTraceName,
+                make.block([ek.apply(exceptionName, stackTraceName)]))]));
+
+        var catchBlock = currentBlock = make.emptyBlock();
+        var catchName = newName('catch');
+        addStatement(make.functionInvocation(finallyName,
+            [make.functionExpression([],
+                 ek.apply(exceptionName, stackTraceName))]));
+
+        var listenBlock = currentBlock = make.emptyBlock();
+        var parameter = newName('x');
+        if (node.identifier != null) {
+          addStatement(make.assignmentExpression(
+              node.identifier, make.identifier(parameter)));
+        } else {
+          assert(node.loopVariable != null);
+          addStatement(make.variableDeclarationStatement(
+              scanner.Keyword.keywords[node.loopVariable.keyword.lexeme],
+              [make.variableDeclaration(
+                   node.loopVariable.identifier.name,
+                   make.identifier(parameter))],
+              node.loopVariable.type));
+        }
+
+        var savedBreakTargets = breakTargets;
+        var savedContinueTargets = continueTargets;
+        var savedStream = currentStream;
+        breakTargets =
+            breakTargets.map(_finallyBreakTarget(finallyName)).toList();
+        continueTargets =
+            continueTargets.map(_finallyContinueTarget(finallyName)).toList();
+        currentStream = streamName;
+        visit(node.body)((v) {
+          v = addTempDeclaration(v);
+          var savedBlock = currentBlock;
+          var returnBlock = currentBlock = make.emptyBlock();
+          rk(v);
+          currentBlock = savedBlock;
+          addStatement(make.functionInvocation(finallyName,
+              [make.functionExpression([], returnBlock)]));
+        }, new NamedErrorContinuation(catchName), () {});
+
+
+        breakTargets = savedBreakTargets;
+        continueTargets = savedContinueTargets;
+        currentStream = savedStream;
+        currentBlock = savedBlock;
+        addStatement(
+            make.functionDeclarationStatement(doneName, [], doneBlock));
+        addStatement(make.variableDeclarationStatement(
+            scanner.Keyword.VAR, [make.variableDeclaration(streamName)]));
+        addStatement(make.functionDeclarationStatement(finallyName,
+            [finallyContName], finallyBlock));
+        addStatement(make.functionDeclarationStatement(catchName,
+            [exceptionName, stackTraceName], catchBlock));
+        if (currentStream != null) {
+          addStatement(make.methodInvocation(
+              make.identifier(currentStream), 'pause', []));
+        }
+        addStatement(make.assignmentExpression(
+            make.identifier(streamName),
+            make.methodInvocation(expr, 'listen',
+                [make.functionExpression([parameter], listenBlock),
+                 make.namedExpression('onError', make.identifier(catchName)),
+                 make.namedExpression('onDone', make.identifier(doneName))])));
+      });
+    };
   }
 
   _translateForUpdaters(List<ast.Expression> exprs, ek, sk) {
@@ -1156,7 +1286,8 @@ class AsyncTransformer extends ast.AstVisitor {
         if (member is ast.SwitchDefault) {
           members.add(make.switchCase(null, bodyBlock.statements));
         } else {
-          members.add(make.switchCase(member.expression, bodyBlock.statements));
+          members.add(make.switchCase((member as ast.SwitchCase).expression,
+              bodyBlock.statements));
         }
       }
       breakTargets = savedBreakTargets;
@@ -1238,6 +1369,30 @@ class AsyncTransformer extends ast.AstVisitor {
     return catchName;
   }
 
+
+
+  _finallyBreakTarget(String finallyName) => (JumpTarget target) {
+    return new JumpTarget(target.labels,
+        make.parenthesizedExpression(
+            make.functionExpression([],
+                make.functionInvocation(finallyName,
+                    [target.expression]))));
+  };
+
+  _finallyContinueTarget(String finallyName) => (JumpTarget target) {
+    if (target.trampolineName == null) {
+      return _finallyBreakTarget(finallyName)(target);
+    }
+    return new JumpTarget(target.labels,
+        make.parenthesizedExpression(
+            make.functionExpression([],
+                make.functionInvocation(finallyName,
+                    [make.functionExpression([], make.block(
+                         [make.assignmentExpression(
+                              make.identifier(target.trampolineName),
+                              target.expression)]))]))));
+  };
+
   visitTryStatement(ast.TryStatement node) => (rk, ek, sk) {
     var savedBlock = currentBlock;
     var joinName = newName('join');
@@ -1248,28 +1403,6 @@ class AsyncTransformer extends ast.AstVisitor {
     var savedContinueTargets = continueTargets;
     var finallyName, finallyContName, finallyBlock;
     if (node.finallyBlock != null) {
-      JumpTarget newBreakTarget(JumpTarget target) {
-        return new JumpTarget(target.labels,
-            make.parenthesizedExpression(
-                make.functionExpression([],
-                    make.functionInvocation(finallyName,
-                        [target.expression]))));
-      }
-
-      JumpTarget newContinueTarget(JumpTarget target) {
-        if (target.trampolineName == null) {
-          return newBreakTarget(target);
-        }
-        return new JumpTarget(target.labels,
-            make.parenthesizedExpression(
-                make.functionExpression([],
-                    make.functionInvocation(finallyName,
-                        [make.functionExpression([], make.block(
-                             [make.assignmentExpression(
-                                  make.identifier(target.trampolineName),
-                                  target.expression)]))]))));
-      }
-
       finallyName = newName('finally');
       finallyContName = newName('cont');
       finallyBlock = currentBlock = make.emptyBlock();
@@ -1289,8 +1422,10 @@ class AsyncTransformer extends ast.AstVisitor {
                  make.block([ek.apply(exceptionName, stackTraceName)]))]);
       }
 
-      breakTargets = breakTargets.map(newBreakTarget).toList();
-      continueTargets = continueTargets.map(newContinueTarget).toList();
+      breakTargets =
+          breakTargets.map(_finallyBreakTarget(finallyName)).toList();
+      continueTargets =
+          continueTargets.map(_finallyContinueTarget(finallyName)).toList();
       var ret = rk;
       rk = (v) {
         v = addTempDeclaration(v);
@@ -1339,7 +1474,7 @@ class AsyncTransformer extends ast.AstVisitor {
         [make.catchClause(null, exceptionName, stackTraceName, catchBlock)]));
   };
 
-  _translateDeclarationList(scanner.Keyword keyword,
+  _translateDeclarationList(scanner.Keyword keyword, ast.TypeName type,
       ast.VariableDeclarationList node, ek, sk) {
     translateDecl(ast.VariableDeclaration decl, ek, sk) {
       if (decl.initializer == null) {
@@ -1364,7 +1499,7 @@ class AsyncTransformer extends ast.AstVisitor {
         decls.add(decl);
         var nextDecl = node.variables[i];
         if (awaits.contains(nextDecl)) {
-          _residualizeDeclarationList(keyword, decls);
+          _residualizeDeclarationList(keyword, type, decls);
           decls.clear();
         }
         translateDecl(nextDecl, ek, nextCont);
@@ -1373,22 +1508,24 @@ class AsyncTransformer extends ast.AstVisitor {
     translateDecl(node.variables.first, ek, cont);
   }
 
-  void _residualizeDeclarationList(scanner.Keyword keyword,
+  void _residualizeDeclarationList(scanner.Keyword keyword, ast.TypeName type,
       List<ast.VariableDeclaration> decls) {
     if (decls.isEmpty) return;
-    addStatement(make.variableDeclarationStatement(keyword, decls));
+    addStatement(make.variableDeclarationStatement(keyword, decls, type));
   }
 
   visitVariableDeclarationStatement(
       ast.VariableDeclarationStatement node) => (rk, ek, sk) {
-    // TODO(kmillikin): A null keyword indicates a type.  Do not discard it!
-    var keyword = node.variables.keyword == null
-        ? scanner.Keyword.VAR
-        : scanner.Keyword.keywords[node.variables.keyword.lexeme];
-    return _translateDeclarationList(keyword, node.variables, ek, (decls) {
-      _residualizeDeclarationList(keyword, decls);
-      return sk();
-    });
+    var keyword;
+    if (node.variables.keyword != null) {
+      keyword = scanner.Keyword.keywords[node.variables.keyword.lexeme];
+    }
+    var type = node.variables.type;
+    return _translateDeclarationList(keyword, type, node.variables, ek,
+        (decls) {
+          _residualizeDeclarationList(keyword, type, decls);
+          return sk();
+        });
   };
 
   // [[while (E) S1; S2]] =
@@ -1555,6 +1692,10 @@ class AsyncTransformer extends ast.AstVisitor {
     var parameter = newName('x');
     var savedBlock = currentBlock;
     var tryBlock = currentBlock = make.emptyBlock();
+    if (currentStream != null) {
+      addStatement(make.methodInvocation(
+          make.identifier(currentStream), 'resume', []));
+    }
     sk(make.identifier(parameter));
 
     currentBlock = savedBlock;
@@ -1592,7 +1733,14 @@ class AsyncTransformer extends ast.AstVisitor {
 
   visitAwaitExpression(ast.AwaitExpression node) => (ek, sk) {
     return visit(node.expression)(ek, (expr) {
-      addStatement(make.methodInvocation(expr, 'then',
+      if (currentStream != null) {
+        expr = addTempDeclaration(expr);
+        addStatement(make.methodInvocation(
+            make.identifier(currentStream), 'pause', []));
+      }
+      var wrapped =
+          make.newInstance(make.identifier('Future', 'value'), [expr]);
+      addStatement(make.methodInvocation(wrapped, 'then',
           [_reifyAwaitContinuation(sk, ek),
            make.namedExpression('onError', ek.reify())]));
     });
