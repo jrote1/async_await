@@ -29,9 +29,6 @@ class Compiler {
   bool _initialized = false;
   AnalysisContext _context;
 
-  Compiler() {
-  }
-
   void _initialize(String packageRoot) {
     if (_initialized) return;
     _context = AnalysisEngine.instance.createAnalysisContext();
@@ -44,6 +41,7 @@ class Compiler {
          new PackageUriResolver([new JavaFile(packageRoot)]),
          new FileUriResolver()]);
     (_context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
+    _initialized = true;
   }
 
   CompilationUnit _parse(String source, String path, String packageRoot,
