@@ -11,7 +11,6 @@ import 'package:analyzer/src/generated/ast.dart';
 import 'package:analyzer/src/generated/engine.dart';
 import 'package:analyzer/src/generated/error.dart';
 import 'package:analyzer/src/generated/java_io.dart';
-import 'package:analyzer/src/generated/sdk.dart';
 import 'package:analyzer/src/generated/sdk_io.dart';
 import 'package:analyzer/src/generated/source.dart';
 import 'package:analyzer/src/generated/source_io.dart';
@@ -27,32 +26,38 @@ class ErrorCollector extends AnalysisErrorListener {
 class Compiler {
   static Compiler _instance = new Compiler();
 
+  bool _initialized = false;
   AnalysisContext _context;
-  DartSdk _sdk;
 
   Compiler() {
+  }
+
+  void _initialize(String packageRoot) {
+    if (_initialized) return;
     _context = AnalysisEngine.instance.createAnalysisContext();
     String sdkPath = Platform.environment['DART_SDK'];
     if (sdkPath == null) {
       throw 'Cannot find the Dart SDK (perhaps DART_SDK is not set).';
     }
-    _sdk = new DirectoryBasedDartSdk(new JavaFile(sdkPath)) as DartSdk;
-    _context.sourceFactory = new SourceFactory([new DartUriResolver(_sdk),
-                                                new FileUriResolver()]);
+    _context.sourceFactory = new SourceFactory(
+        [new DartUriResolver(new DirectoryBasedDartSdk(new JavaFile(sdkPath))),
+         new PackageUriResolver([new JavaFile(packageRoot)]),
+         new FileUriResolver()]);
     (_context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
   }
 
-  CompilationUnit _parse(String source, String path,
+  CompilationUnit _parse(String source, String path, String packageRoot,
       AnalysisErrorListener errorListener) {
+    _initialize(packageRoot);
     var stringSource = new StringSource(source, path);
     var libraryElement = _context.computeLibraryElement(stringSource);
     return _context.getResolvedCompilationUnit(stringSource, libraryElement);
   }
 
-  static String compile(String source, String path,
+  static String compile(String source, String path, String packageRoot,
       String onError(ErrorCollector errorCollector)) {
     var errorCollector = new ErrorCollector();
-    var unit = _instance._parse(source, path, errorCollector);
+    var unit = _instance._parse(source, path, packageRoot, errorCollector);
 
     if (errorCollector.errors.isNotEmpty) {
       return onError(errorCollector);

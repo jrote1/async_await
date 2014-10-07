@@ -8,8 +8,8 @@ import 'src/compiler.dart';
 /// compiles it down to raw Dart 1.0 syntax.
 ///
 /// [path] can be relative or absolute.  It is used for error reporting.
-String compile(String source, String path) {
-  return Compiler.compile(source, path, (errorCollector) {
+String compile(String source, String path, String packageRoot) {
+  return Compiler.compile(source, path, packageRoot, (errorCollector) {
     throw new FormatException(
         "Compilation error:\n${errorCollector.errors.join("\n")}");
   });
