@@ -41,6 +41,7 @@ class Compiler {
          new PackageUriResolver([new JavaFile(packageRoot)]),
          new FileUriResolver()]);
     (_context.analysisOptions as AnalysisOptionsImpl).enableAsync = true;
+    (_context.analysisOptions as AnalysisOptionsImpl).enableEnum = true;
     _initialized = true;
   }
 
